@@ -45,33 +45,90 @@
     }
 
     winContexts.forEach(w => {
-        // 0.0. Bảo vệ chống lỗi race-condition getComputedStyle của CKEditor 4 khi Form mở trong Angular
+        // 0.0. Bảo vệ chống lỗi race-condition getComputedStyle, ownerNode của CKEditor 4 khi Form mở trong Angular
         try {
-            const patchCk = (ck) => {
-                if (!ck || !ck.dom || !ck.dom.element || !ck.dom.element.prototype) return;
-                if (ck.dom.element.prototype._daPatched) return;
-                ck.dom.element.prototype._daPatched = true;
+            // Lớp 1: Chặn lỗi unhandled TypeError làm crash thread của Angular/UI
+            w.addEventListener('error', function (event) {
+                if (event && event.message && (event.message.includes('ownerNode') || event.message.includes('getComputedStyle') || event.message.includes('getDirection'))) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    return true;
+                }
+            }, true);
 
-                const origGetComputedStyle = ck.dom.element.prototype.getComputedStyle;
-                if (origGetComputedStyle) {
-                    ck.dom.element.prototype.getComputedStyle = function (propertyName) {
-                        try {
-                            const win = this.getWindow();
-                            if (win && win.$ && win.$.getComputedStyle) {
-                                return origGetComputedStyle.apply(this, arguments);
+            // Lớp 2: Proxy an toàn cho Document.styleSheets tránh crash khi đọc sheet.ownerNode
+            try {
+                const docProto = w.Document ? w.Document.prototype : (w.document ? Object.getPrototypeOf(w.document) : null);
+                if (docProto) {
+                    const origStyleSheets = Object.getOwnPropertyDescriptor(docProto, 'styleSheets')?.get;
+                    if (origStyleSheets) {
+                        const dummySheet = { ownerNode: null, owningElement: null, cssRules: [], rules: [] };
+                        Object.defineProperty(docProto, 'styleSheets', {
+                            configurable: true,
+                            enumerable: true,
+                            get: function () {
+                                const list = origStyleSheets.call(this);
+                                if (!list) return list;
+                                return new Proxy(list, {
+                                    get(target, prop, receiver) {
+                                        if (prop === 'item') {
+                                            return function (idx) {
+                                                const it = target.item(idx);
+                                                return it === null ? dummySheet : it;
+                                            };
+                                        }
+                                        const val = Reflect.get(target, prop, receiver);
+                                        if (val === null && !isNaN(prop)) {
+                                            return dummySheet;
+                                        }
+                                        return val;
+                                    }
+                                });
                             }
-                        } catch (e) {}
-                        return '';
-                    };
+                        });
+                    }
+                }
+            } catch (e) {}
+
+            // Lớp 3: Monkey-patch bảo vệ trực tiếp CKEditor 4
+            const patchCk = (ck) => {
+                if (!ck) return;
+                if (ck.dom && ck.dom.element && ck.dom.element.prototype && !ck.dom.element.prototype._daPatched) {
+                    ck.dom.element.prototype._daPatched = true;
+
+                    const origGetComputedStyle = ck.dom.element.prototype.getComputedStyle;
+                    if (origGetComputedStyle) {
+                        ck.dom.element.prototype.getComputedStyle = function (propertyName) {
+                            try {
+                                const win = this.getWindow();
+                                if (win && win.$ && win.$.getComputedStyle) {
+                                    return origGetComputedStyle.apply(this, arguments);
+                                }
+                            } catch (e) {}
+                            return '';
+                        };
+                    }
+
+                    const origGetDirection = ck.dom.element.prototype.getDirection;
+                    if (origGetDirection) {
+                        ck.dom.element.prototype.getDirection = function () {
+                            try {
+                                return origGetDirection.apply(this, arguments);
+                            } catch (e) {
+                                return 'ltr';
+                            }
+                        };
+                    }
                 }
 
-                const origGetDirection = ck.dom.element.prototype.getDirection;
-                if (origGetDirection) {
-                    ck.dom.element.prototype.getDirection = function () {
+                if (ck.skin && ck.skin.setup && !ck.skin._daPatched) {
+                    ck.skin._daPatched = true;
+                    const origSkinSetup = ck.skin.setup;
+                    ck.skin.setup = function () {
                         try {
-                            return origGetDirection.apply(this, arguments);
+                            return origSkinSetup.apply(this, arguments);
                         } catch (e) {
-                            return 'ltr';
+                            return '';
                         }
                     };
                 }
@@ -96,6 +153,56 @@
         } catch (e) {}
 
         try {
+            function captureArticleTypeFromResult(result) {
+                if (result && Array.isArray(result) && result.length > 0) {
+                    currentArticleTypeId = result[0].Id;
+                    currentArticleTypeName = result[0].Name;
+                }
+            }
+
+            function enrichArticlePayload(parsed) {
+                if (!parsed || typeof parsed !== 'object') return parsed;
+                if (currentUploadedAvatarUrl) {
+                    if (!parsed.ImageUrl) parsed.ImageUrl = currentUploadedAvatarUrl;
+                    if (!parsed.Avatar) parsed.Avatar = currentUploadedAvatarUrl;
+                    if (!parsed.Image) parsed.Image = currentUploadedAvatarUrl;
+                }
+                if (currentEditorContentHtml && (!parsed.Content || parsed.Content.trim() === '')) {
+                    parsed.Content = currentEditorContentHtml;
+                }
+                if (currentArticleTitleText && (!parsed.Title || parsed.Title.trim() === '')) {
+                    parsed.Title = currentArticleTitleText;
+                }
+                if (currentArticleTitleText && (!parsed.Alias || parsed.Alias.trim() === '')) {
+                    parsed.Alias = generateSlug(currentArticleTitleText);
+                }
+                if (currentArticleTypeId && (!parsed.NewTypeId || parsed.NewTypeId === '')) {
+                    parsed.NewTypeId = currentArticleTypeId;
+                }
+                if (currentPublishDateStr) {
+                    parsed.StrCreateDate = currentPublishDateStr;
+                }
+                if (!parsed.Code) {
+                    const rKey = getCurrentRouteKey();
+                    if (rKey && rKey !== 'default') parsed.Code = rKey;
+                }
+                return parsed;
+            }
+
+            function tryEnrichJsonBody(bodyStr) {
+                if (!bodyStr || typeof bodyStr !== 'string') return bodyStr;
+                if (!bodyStr.includes('"Title"') && !bodyStr.includes('"Content"') && !bodyStr.includes('"title"') && !bodyStr.includes('"content"') && !bodyStr.includes('"ImageUrl"') && !bodyStr.includes('"imageUrl"') && !bodyStr.includes('"NewTypeId"') && !bodyStr.includes('"newTypeId"')) {
+                    return bodyStr;
+                }
+                try {
+                    const parsed = JSON.parse(bodyStr);
+                    if (parsed && typeof parsed === 'object') {
+                        return JSON.stringify(enrichArticlePayload(parsed));
+                    }
+                } catch (e) {}
+                return bodyStr;
+            }
+
             const origOpen = w.XMLHttpRequest.prototype.open;
             w.XMLHttpRequest.prototype.open = function (method, url) {
                 this._daReqUrl = url;
@@ -121,53 +228,13 @@
                         if (this._daReqUrl && typeof this._daReqUrl === 'string' && this._daReqUrl.includes('ListLoaiTinTuc') && this.status >= 200 && this.status < 300) {
                             try {
                                 const res = JSON.parse(this.responseText);
-                                if (res && res.Result && Array.isArray(res.Result) && res.Result.length > 0) {
-                                    currentArticleTypeId = res.Result[0].Id;
-                                    currentArticleTypeName = res.Result[0].Name;
-                                }
+                                captureArticleTypeFromResult(res && res.Result);
                             } catch (e) {}
                         }
                     });
                 } catch (e) {}
 
-                if (data && typeof data === 'string') {
-                    try {
-                        if (data.includes('"Title"') || data.includes('"Content"') || data.includes('"title"') || data.includes('"content"') || data.includes('"ImageUrl"') || data.includes('"imageUrl"') || data.includes('"NewTypeId"') || data.includes('"newTypeId"')) {
-                            const parsed = JSON.parse(data);
-                            if (parsed && typeof parsed === 'object') {
-                                if (currentUploadedAvatarUrl && (!parsed.ImageUrl || parsed.ImageUrl === null || parsed.ImageUrl === '')) {
-                                    parsed.ImageUrl = currentUploadedAvatarUrl;
-                                }
-                                if (currentUploadedAvatarUrl && (!parsed.Avatar || parsed.Avatar === null || parsed.Avatar === '')) {
-                                    parsed.Avatar = currentUploadedAvatarUrl;
-                                }
-                                if (currentUploadedAvatarUrl && (!parsed.Image || parsed.Image === null || parsed.Image === '')) {
-                                    parsed.Image = currentUploadedAvatarUrl;
-                                }
-                                if (currentEditorContentHtml && (!parsed.Content || parsed.Content.trim() === '')) {
-                                    parsed.Content = currentEditorContentHtml;
-                                }
-                                if (currentArticleTitleText && (!parsed.Title || parsed.Title.trim() === '')) {
-                                    parsed.Title = currentArticleTitleText;
-                                }
-                                if (currentArticleTitleText && (!parsed.Alias || parsed.Alias === null || parsed.Alias.trim() === '')) {
-                                    parsed.Alias = generateSlug(currentArticleTitleText);
-                                }
-                                if (currentArticleTypeId && (!parsed.NewTypeId || parsed.NewTypeId === null || parsed.NewTypeId === '')) {
-                                    parsed.NewTypeId = currentArticleTypeId;
-                                }
-                                if (currentPublishDateStr) {
-                                    parsed.StrCreateDate = currentPublishDateStr;
-                                }
-                                if (!parsed.Code || parsed.Code === null || parsed.Code === '') {
-                                    const rKey = getCurrentRouteKey();
-                                    if (rKey && rKey !== 'default') parsed.Code = rKey;
-                                }
-                                data = JSON.stringify(parsed);
-                            }
-                        }
-                    } catch (e) {}
-                }
+                data = tryEnrichJsonBody(data);
                 return origSend.call(this, data);
             };
 
@@ -175,53 +242,15 @@
                 const origFetch = w.fetch;
                 w.fetch = async function (resource, init) {
                     const urlStr = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');
-                    if (init && init.body && typeof init.body === 'string') {
-                        try {
-                            if (init.body.includes('"Title"') || init.body.includes('"Content"') || init.body.includes('"title"') || init.body.includes('"content"') || init.body.includes('"NewTypeId"') || init.body.includes('"newTypeId"')) {
-                                const parsed = JSON.parse(init.body);
-                                if (parsed && typeof parsed === 'object') {
-                                    if (currentUploadedAvatarUrl && (!parsed.ImageUrl || parsed.ImageUrl === null || parsed.ImageUrl === '')) {
-                                        parsed.ImageUrl = currentUploadedAvatarUrl;
-                                    }
-                                    if (currentUploadedAvatarUrl && (!parsed.Avatar || parsed.Avatar === null || parsed.Avatar === '')) {
-                                        parsed.Avatar = currentUploadedAvatarUrl;
-                                    }
-                                    if (currentUploadedAvatarUrl && (!parsed.Image || parsed.Image === null || parsed.Image === '')) {
-                                        parsed.Image = currentUploadedAvatarUrl;
-                                    }
-                                    if (currentEditorContentHtml && (!parsed.Content || parsed.Content.trim() === '')) {
-                                        parsed.Content = currentEditorContentHtml;
-                                    }
-                                    if (currentArticleTitleText && (!parsed.Title || parsed.Title.trim() === '')) {
-                                        parsed.Title = currentArticleTitleText;
-                                    }
-                                    if (currentArticleTitleText && (!parsed.Alias || parsed.Alias === null || parsed.Alias.trim() === '')) {
-                                        parsed.Alias = generateSlug(currentArticleTitleText);
-                                    }
-                                    if (currentArticleTypeId && (!parsed.NewTypeId || parsed.NewTypeId === null || parsed.NewTypeId === '')) {
-                                        parsed.NewTypeId = currentArticleTypeId;
-                                    }
-                                    if (currentPublishDateStr) {
-                                        parsed.StrCreateDate = currentPublishDateStr;
-                                    }
-                                    if (!parsed.Code || parsed.Code === null || parsed.Code === '') {
-                                        const rKey = getCurrentRouteKey();
-                                        if (rKey && rKey !== 'default') parsed.Code = rKey;
-                                    }
-                                    init.body = JSON.stringify(parsed);
-                                }
-                            }
-                        } catch (e) {}
+                    if (init && init.body) {
+                        init.body = tryEnrichJsonBody(init.body);
                     }
                     const response = await origFetch.apply(this, arguments);
                     try {
                         if (urlStr && urlStr.includes('ListLoaiTinTuc') && response.ok) {
                             const clone = response.clone();
                             clone.json().then(res => {
-                                if (res && res.Result && Array.isArray(res.Result) && res.Result.length > 0) {
-                                    currentArticleTypeId = res.Result[0].Id;
-                                    currentArticleTypeName = res.Result[0].Name;
-                                }
+                                captureArticleTypeFromResult(res && res.Result);
                             }).catch(() => {});
                         }
                     } catch (e) {}
@@ -2215,6 +2244,78 @@ AIzaSy...Key3..."></textarea>
         } catch (e) {}
     }
 
+    /**
+     * Helper thực thi lặp lại theo danh sách độ trễ (nhịp thời gian)
+     */
+    function runWithRetries(fn, delays = [0, 300, 800, 1500]) {
+        if (typeof fn !== 'function') return;
+        delays.forEach(d => {
+            if (d === 0) {
+                try { fn(); } catch (e) {}
+            } else {
+                setTimeout(() => {
+                    try { fn(); } catch (e) {}
+                }, d);
+            }
+        });
+    }
+
+    /**
+     * Helper dùng chung: Đồng bộ 1 hoặc nhiều trường dữ liệu vào cả Angular Ivy (2 - 19+) và AngularJS Scope (1.x)
+     * Tự động xử lý FormControl (markAsDirty, markAsTouched, updateValueAndValidity), Dropdown ng-select, PrimeNG Calendar
+     */
+    function syncFormFieldValue(nodeOrSelector, fieldNames, value, options = {}) {
+        const fields = Array.isArray(fieldNames) ? fieldNames : [fieldNames];
+
+        // 1. Đồng bộ Angular Ivy (Angular 2 - 19+)
+        syncToAngularIvy(nodeOrSelector, comp => {
+            let changed = false;
+            fields.forEach(f => {
+                if (f in comp) { comp[f] = value; changed = true; }
+                if (comp.item && f in comp.item) { comp.item[f] = value; changed = true; }
+                if (comp.model && f in comp.model) { comp.model[f] = value; changed = true; }
+                if (comp.form && comp.form.controls && comp.form.controls[f]) {
+                    const ctrl = comp.form.controls[f];
+                    if (ctrl.setValue) ctrl.setValue(value);
+                    if (ctrl.markAsDirty) ctrl.markAsDirty();
+                    if (ctrl.markAsTouched) ctrl.markAsTouched();
+                    if (ctrl.updateValueAndValidity) ctrl.updateValueAndValidity();
+                    changed = true;
+                }
+            });
+
+            // Hỗ trợ Component Dropdown (ng-select / p-dropdown)
+            if (options.isSelect) {
+                if (comp.itemsList && comp.itemsList.items && comp.itemsList.items.length > 0) {
+                    const found = comp.itemsList.items.find(it => (it.value && (it.value.Id === value || it.value.id === value || it.value === value)) || (it.label && options.selectItemLabel && it.label === options.selectItemLabel)) || comp.itemsList.items[0];
+                    if (found && comp.select) { comp.select(found); changed = true; }
+                }
+                if (comp.writeValue) { comp.writeValue(value); changed = true; }
+            }
+
+            // Hỗ trợ PrimeNG Calendar
+            if (options.isDate && options.dateObj) {
+                if (comp.writeValue) { comp.writeValue(options.dateObj); changed = true; }
+                if (comp.updateModel) { comp.updateModel(options.dateObj); changed = true; }
+            }
+
+            if (comp.form) {
+                if (comp.form.markAsDirty) comp.form.markAsDirty();
+                if (comp.form.markAsTouched) comp.form.markAsTouched();
+                if (comp.form.updateValueAndValidity) comp.form.updateValueAndValidity();
+            }
+            return changed;
+        });
+
+        // 2. Đồng bộ AngularJS Scope (1.x)
+        syncToAngularJs(nodeOrSelector, scope => {
+            fields.forEach(f => {
+                if (scope.model) scope.model[f] = value;
+                if (scope.item) scope.item[f] = value;
+            });
+        });
+    }
+
     function setNativeInputValue(element, value) {
         if (!element) return;
         try {
@@ -2284,31 +2385,7 @@ AIzaSy...Key3..."></textarea>
 
             matchedInputs.forEach(inp => {
                 setNativeInputValue(inp, titleText);
-
-                // Đồng bộ Angular Ivy (Angular 2 - 19+)
-                syncToAngularIvy(inp, comp => {
-                    if ('Title' in comp) comp.Title = titleText;
-                    if ('title' in comp) comp.title = titleText;
-                    if (comp.item) comp.item.Title = titleText;
-                    if (comp.model) comp.model.Title = titleText;
-                    if (comp.form && comp.form.controls) {
-                        const ctrl = comp.form.controls.Title || comp.form.controls.title || comp.form.controls.Name || comp.form.controls.name;
-                        if (ctrl) {
-                            ctrl.setValue(titleText);
-                            if (ctrl.markAsDirty) ctrl.markAsDirty();
-                            if (ctrl.markAsTouched) ctrl.markAsTouched();
-                            if (ctrl.updateValueAndValidity) ctrl.updateValueAndValidity();
-                            return true;
-                        }
-                    }
-                    return true;
-                });
-
-                // Đồng bộ AngularJS Scope (1.x)
-                syncToAngularJs(inp, scope => {
-                    if (scope.model) scope.model.Title = titleText;
-                    if (scope.item) scope.item.Title = titleText;
-                });
+                syncFormFieldValue(inp, ['Title', 'title', 'Name', 'name'], titleText);
             });
         };
 
@@ -2323,36 +2400,15 @@ AIzaSy...Key3..."></textarea>
             aliasInputs.forEach(inp => {
                 if (!inp.value || inp.value.trim() === '') {
                     setNativeInputValue(inp, slug);
-                    syncToAngularIvy(inp, comp => {
-                        if ('Alias' in comp) comp.Alias = slug;
-                        if ('alias' in comp) comp.alias = slug;
-                        if (comp.item) comp.item.Alias = slug;
-                        if (comp.model) comp.model.Alias = slug;
-                        if (comp.form && comp.form.controls) {
-                            const ctrl = comp.form.controls.Alias || comp.form.controls.alias;
-                            if (ctrl) {
-                                ctrl.setValue(slug);
-                                if (ctrl.markAsDirty) ctrl.markAsDirty();
-                                if (ctrl.markAsTouched) ctrl.markAsTouched();
-                                if (ctrl.updateValueAndValidity) ctrl.updateValueAndValidity();
-                                return true;
-                            }
-                        }
-                        return true;
-                    });
-                    syncToAngularJs(inp, scope => {
-                        if (scope.model) scope.model.Alias = slug;
-                        if (scope.item) scope.item.Alias = slug;
-                    });
+                    syncFormFieldValue(inp, ['Alias', 'alias'], slug);
                 }
             });
         };
 
-        applyTitleToForm();
-        applyAliasToForm();
-        setTimeout(() => { applyTitleToForm(); applyAliasToForm(); }, 300);
-        setTimeout(() => { applyTitleToForm(); applyAliasToForm(); }, 800);
-        setTimeout(() => { applyTitleToForm(); applyAliasToForm(); }, 1500);
+        runWithRetries(() => {
+            applyTitleToForm();
+            applyAliasToForm();
+        }, [0, 300, 800, 1500]);
     }
 
     function setEditorContent(html) {
@@ -2412,40 +2468,12 @@ AIzaSy...Key3..."></textarea>
             }
         };
 
-        populateAllEditors();
-        setTimeout(populateAllEditors, 300);
-        setTimeout(populateAllEditors, 800);
+        runWithRetries(populateAllEditors, [0, 300, 800]);
 
         // 4. Đồng bộ vào Angular Ivy (Angular 2 - 19+) Form Controls & Validation
-        syncToAngularIvy('form, .modal, ckeditor, [formcontrolname], textarea, input', comp => {
-            let changed = false;
-            ['Content', 'content', 'Description', 'description', 'Detail', 'detail'].forEach(key => {
-                if (key in comp) { comp[key] = html; changed = true; }
-                if (comp.item && key in comp.item) { comp.item[key] = html; changed = true; }
-                if (comp.model && key in comp.model) { comp.model[key] = html; changed = true; }
-                if (comp.form && comp.form.controls && comp.form.controls[key]) {
-                    comp.form.controls[key].setValue(html);
-                    comp.form.controls[key].markAsDirty();
-                    comp.form.controls[key].markAsTouched();
-                    comp.form.controls[key].updateValueAndValidity();
-                    changed = true;
-                }
-            });
-            if (comp.form) {
-                comp.form.markAsDirty();
-                comp.form.markAsTouched();
-                comp.form.updateValueAndValidity();
-            }
-            return changed;
-        });
+        syncFormFieldValue('form, .modal, ckeditor, [formcontrolname], textarea, input', ['Content', 'content', 'Description', 'description', 'Detail', 'detail'], html);
 
-        // 5. Đồng bộ AngularJS Scope (1.x)
-        syncToAngularJs('.modal, form, [ng-controller], [ng-model*="Content"], [ng-model*="Description"], textarea, .modal-dialog, body', scope => {
-            if (scope.model) { scope.model.Content = html; scope.model.Description = html; }
-            if (scope.item) { scope.item.Content = html; scope.item.Description = html; }
-        });
-
-        // 6. Mở khóa nút "Lưu thay đổi" nếu bị Angular disable
+        // 5. Mở khóa nút "Lưu thay đổi" nếu bị Angular disable
         setTimeout(() => {
             const saveBtns = Array.from(document.querySelectorAll('button, a')).filter(b => b.textContent && b.textContent.includes('Lưu thay đổi'));
             saveBtns.forEach(btn => {
@@ -2463,130 +2491,45 @@ AIzaSy...Key3..."></textarea>
 
         if (!previewUrl) return;
 
-        const applyToPreviewElement = (el) => {
-            if (!el || el.closest('#da-modal, .da-auto-wrapper, .cke, .cke_reset, ckeditor')) return;
-            if (el.tagName === 'IMG') {
-                el.src = previewUrl;
-                el.srcset = '';
-                el.style.display = 'block';
-                el.style.objectFit = 'cover';
-                el.style.width = '100%';
-                el.style.height = '100%';
-            } else {
-                el.style.backgroundImage = `url("${previewUrl}")`;
-                el.style.backgroundSize = 'cover';
-                el.style.backgroundPosition = 'center';
-                el.style.backgroundRepeat = 'no-repeat';
-                // Đặt thẻ img bên trong để che hoàn toàn icon No Image available
-                el.innerHTML = `<img src="${previewUrl}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 4px; display: block;" />`;
+        // 1. Cập nhật trực tiếp ô xem trước cạnh nút "Chọn hình ảnh"
+        const allButtons = Array.from(document.querySelectorAll('button, a, div'));
+        const selectImgBtn = allButtons.find(b => b.textContent && b.textContent.includes('Chọn hình'));
+        
+        if (selectImgBtn) {
+            const sibling = selectImgBtn.nextElementSibling || selectImgBtn.previousElementSibling;
+            if (sibling && !sibling.closest('.cke, .cke_reset, ckeditor')) {
+                sibling.innerHTML = `<img src="${previewUrl}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 4px; display: block;" />`;
+                sibling.style.backgroundImage = 'none';
             }
-        };
-
-        const runDomAvatarSync = () => {
-            // 1.1 Tìm nút "Chọn hình ảnh" và can thiệp khung ảnh bên cạnh
-            const selectImgBtns = Array.from(document.querySelectorAll('button, a, .btn, div')).filter(b => {
-                if (b.closest('#da-modal, .da-auto-wrapper')) return false;
-                const t = (b.textContent || '').trim().toLowerCase();
-                return t.includes('chọn hình') || t.includes('chọn ảnh');
-            });
-
-            selectImgBtns.forEach(btn => {
-                const group = btn.closest('.form-group, .form-item, .row, [class*="col-"], div') || btn.parentElement;
-                if (group) {
-                    group.querySelectorAll('img').forEach(img => applyToPreviewElement(img));
-                    group.querySelectorAll('div, figure, span').forEach(box => {
-                        if (box === btn || box.contains(btn) || box.querySelector('button, a, label')) return;
-                        const r = box.getBoundingClientRect();
-                        if (r.width >= 40 && r.height >= 40 && r.width <= 300 && r.height <= 300) {
-                            applyToPreviewElement(box);
-                        }
-                    });
-                }
-                if (btn.nextElementSibling) applyToPreviewElement(btn.nextElementSibling);
-                if (btn.previousElementSibling) applyToPreviewElement(btn.previousElementSibling);
-                if (btn.parentElement && btn.parentElement.nextElementSibling) applyToPreviewElement(btn.parentElement.nextElementSibling);
-            });
-
-            // 1.2 Tìm theo nhãn "Ảnh đại diện"
-            document.querySelectorAll('label, span, b, strong').forEach(lbl => {
-                if (lbl.closest('#da-modal, .da-auto-wrapper')) return;
-                const t = lbl.textContent.trim().toLowerCase();
-                if (t.includes('ảnh đại diện') || t.includes('hình đại diện') || t.includes('avatar')) {
-                    const group = lbl.closest('.form-group, .form-item, .row, [class*="col-"], div') || lbl.parentElement;
-                    if (group) {
-                        group.querySelectorAll('img').forEach(img => applyToPreviewElement(img));
-                        group.querySelectorAll('div, figure, span').forEach(box => {
-                            if (box.querySelector('button, label')) return;
-                            const r = box.getBoundingClientRect();
-                            if (r.width >= 40 && r.height >= 40 && r.width <= 300 && r.height <= 300) {
-                                applyToPreviewElement(box);
-                            }
-                        });
-                    }
-                }
-            });
-
-            // 1.3 Quét các phần tử có chứa chữ "No Image" hoặc "available" trên DOM
-            document.querySelectorAll('*').forEach(el => {
-                if (el.closest('#da-modal, .da-auto-wrapper, .cke, ckeditor')) return;
-                if (el.children.length === 0 || el.tagName === 'IMG') {
-                    const t = (el.textContent || '').toLowerCase();
-                    const s = (el.getAttribute('src') || '').toLowerCase();
-                    const alt = (el.getAttribute('alt') || '').toLowerCase();
-                    const bg = (el.style?.backgroundImage || '').toLowerCase();
-                    if (t.includes('no image') || t.includes('available') || s.includes('no-image') || s.includes('available') || s.includes('noimage') || alt.includes('no image') || bg.includes('no-image') || bg.includes('available')) {
-                        applyToPreviewElement(el.parentElement || el);
-                    }
-                }
-            });
-
-            // 1.4 Gán giá trị URL vào các input ẩn
-            const avatarInputs = document.querySelectorAll('input[ng-model*="Avatar" i], input[ng-model*="Image" i], input[name*="Avatar" i], input[name*="Image" i], input[id*="Avatar" i], input[id*="Image" i], input[formcontrolname*="Avatar" i], input[formcontrolname*="Image" i], input[formcontrolname*="Thumb" i]');
-            avatarInputs.forEach(inp => {
-                inp.value = modelValue;
-                inp.dispatchEvent(new Event('input', { bubbles: true }));
-                inp.dispatchEvent(new Event('change', { bubbles: true }));
-            });
-        };
-
-        // Kích hoạt nhiều lần để đón đầu Angular re-render
-        runDomAvatarSync();
-        setTimeout(runDomAvatarSync, 200);
-        setTimeout(runDomAvatarSync, 600);
-        setTimeout(runDomAvatarSync, 1200);
-
-        // 3. ĐỒNG BỘ VÀO ANGULAR IVY (Angular 2 - 19+)
-        syncToAngularIvy('form, .modal, [role="dialog"], .p-dialog, [formcontrolname], [formgroup], app-news-detail, app-them-moi', comp => {
-            let changed = false;
-            const fields = ['ImageUrl', 'imageUrl', 'Avatar', 'avatar', 'AvatarUrl', 'avatarUrl', 'Image', 'image', 'ThumbUrl', 'thumbUrl', 'Thumbnail', 'thumbnail'];
-            fields.forEach(f => {
-                if (f in comp) { comp[f] = modelValue; changed = true; }
-                if (comp.item && f in comp.item) { comp.item[f] = modelValue; changed = true; }
-                if (comp.model && f in comp.model) { comp.model[f] = modelValue; changed = true; }
-                if (comp.form && comp.form.controls && comp.form.controls[f]) {
-                    comp.form.controls[f].setValue(modelValue);
-                    if (comp.form.controls[f].markAsDirty) comp.form.controls[f].markAsDirty();
-                    if (comp.form.controls[f].markAsTouched) comp.form.controls[f].markAsTouched();
-                    if (comp.form.controls[f].updateValueAndValidity) comp.form.controls[f].updateValueAndValidity();
-                    changed = true;
-                }
-            });
-            return changed;
-        });
-
-        // 4. Đồng bộ AngularJS Scope (1.x)
-        syncToAngularJs('.modal, form, [ng-controller], [ng-model*="Avatar" i], [ng-model*="Image" i], .modal-dialog, body', scope => {
-            if (scope.model) {
-                scope.model.Avatar = modelValue;
-                scope.model.ImageUrl = modelValue;
-                scope.model.Image = modelValue;
+            const parent = selectImgBtn.parentElement;
+            if (parent) {
+                const nearImgs = Array.from(parent.querySelectorAll('img')).filter(img => !img.closest('.cke, .cke_reset, ckeditor'));
+                nearImgs.forEach(img => {
+                    img.src = previewUrl;
+                    img.setAttribute('src', previewUrl);
+                });
             }
-            if (scope.item) {
-                scope.item.Avatar = modelValue;
-                scope.item.ImageUrl = modelValue;
-                scope.item.Image = modelValue;
+        }
+
+        // Tìm các ảnh placeholder (chỉ ở ngoài CKEditor)
+        const nonCkeImgs = Array.from(document.querySelectorAll('img')).filter(img => !img.closest('.cke, .cke_reset, ckeditor, #da-modal'));
+        nonCkeImgs.forEach(img => {
+            const s = (img.src || '').toLowerCase();
+            const alt = (img.alt || '').toLowerCase();
+            if (s.includes('no-image') || s.includes('no_image') || s.includes('placeholder') || alt.includes('avatar') || alt.includes('ảnh')) {
+                img.src = previewUrl;
+                img.setAttribute('src', previewUrl);
             }
         });
+
+        // 2. Gán giá trị URL vào các input ẩn
+        const avatarInputs = document.querySelectorAll('input[ng-model*="Avatar" i], input[ng-model*="Image" i], input[name*="Avatar" i], input[name*="Image" i], input[id*="Avatar" i], input[id*="Image" i], input[formcontrolname*="Avatar" i], input[formcontrolname*="Image" i], input[formcontrolname*="Thumb" i]');
+        avatarInputs.forEach(inp => {
+            setNativeInputValue(inp, modelValue);
+        });
+
+        // 3. Đồng bộ vào Angular Ivy (Angular 2 - 19+) và AngularJS Scope (1.x)
+        syncFormFieldValue('form, .modal, [role="dialog"], .p-dialog, [formcontrolname], [formgroup], app-news-detail, app-them-moi', ['ImageUrl', 'imageUrl', 'Avatar', 'avatar', 'AvatarUrl', 'avatarUrl', 'Image', 'image', 'ThumbUrl', 'thumbUrl', 'Thumbnail', 'thumbnail'], modelValue);
     }
 
     async function autoSelectArticleType(targetTypeId) {
@@ -2674,53 +2617,14 @@ AIzaSy...Key3..."></textarea>
                 }
             });
 
-            // 3. Đồng bộ vào Angular Ivy (Angular 2 - 19+)
-            syncToAngularIvy('form, .modal, [formcontrolname], select, ng-select, .ng-select, p-dropdown, .p-dropdown', comp => {
-                const finalId = typeIdToSelect || currentArticleTypeId;
-                if (!finalId) return false;
-                let changed = false;
-                const typeKeys = ['NewTypeId', 'newTypeId', 'TypeId', 'typeId', 'LoaiTinTucId', 'loaiTinTucId', 'NewsTypeId'];
-                typeKeys.forEach(k => {
-                    if (k in comp) { comp[k] = finalId; changed = true; }
-                    if (comp.item && k in comp.item) { comp.item[k] = finalId; changed = true; }
-                    if (comp.model && k in comp.model) { comp.model[k] = finalId; changed = true; }
-                    if (comp.form && comp.form.controls && comp.form.controls[k]) {
-                        comp.form.controls[k].setValue(finalId);
-                        comp.form.controls[k].markAsDirty();
-                        comp.form.controls[k].markAsTouched();
-                        comp.form.controls[k].updateValueAndValidity();
-                        changed = true;
-                    }
-                });
-                // Hỗ trợ NgSelectComponent trực tiếp
-                if (comp.itemsList && comp.itemsList.items && comp.itemsList.items.length > 0) {
-                    const found = comp.itemsList.items.find(it => (it.value && (it.value.Id === finalId || it.value.id === finalId || it.value === finalId)) || (it.label && it.label === currentArticleTypeName)) || comp.itemsList.items[0];
-                    if (found && comp.select) { comp.select(found); changed = true; }
-                }
-                if (comp.writeValue) { comp.writeValue(finalId); changed = true; }
-
-                if (comp.form) {
-                    comp.form.markAsDirty();
-                    comp.form.markAsTouched();
-                    comp.form.updateValueAndValidity();
-                }
-                return changed;
-            });
-
-            // 4. Đồng bộ AngularJS Scope (1.x)
-            syncToAngularJs('.modal, form, [ng-controller], [ng-model*="NewTypeId"], [ng-model*="TypeId"], .modal-dialog, body', scope => {
-                const finalId = typeIdToSelect || currentArticleTypeId;
-                if (finalId) {
-                    if (scope.model) { scope.model.NewTypeId = finalId; }
-                    if (scope.item) { scope.item.NewTypeId = finalId; }
-                }
-            });
+            // 3. Đồng bộ vào Angular Ivy & AngularJS Scope
+            const finalId = typeIdToSelect || currentArticleTypeId;
+            if (finalId) {
+                syncFormFieldValue('form, .modal, [formcontrolname], select, ng-select, .ng-select, p-dropdown, .p-dropdown', ['NewTypeId', 'newTypeId', 'TypeId', 'typeId', 'LoaiTinTucId', 'loaiTinTucId', 'NewsTypeId'], finalId, { isSelect: true, selectItemLabel: currentArticleTypeName });
+            }
         };
 
-        applySelection();
-        setTimeout(applySelection, 300);
-        setTimeout(applySelection, 800);
-        setTimeout(applySelection, 1500);
+        runWithRetries(applySelection, [0, 300, 800, 1500]);
 
         if (currentArticleTypeName) {
             logStatus(`Đã tự động chọn Loại bài viết: "${currentArticleTypeName}"`, 'success');
@@ -2974,25 +2878,8 @@ AIzaSy...Key3..."></textarea>
             matchedInputs.forEach(inp => {
                 setNativeInputValue(inp, formattedStr);
 
-                // Đồng bộ Angular Ivy (Angular 2 - 19+) cho ô input và p-calendar
-                syncToAngularIvy(inp, comp => {
-                    let changed = false;
-                    if (comp.writeValue) { comp.writeValue(dateResult.dateObj); changed = true; }
-                    if (comp.updateModel) { comp.updateModel(dateResult.dateObj); changed = true; }
-                    if (comp.form && comp.form.controls) {
-                        const dateControls = ['StrCreateDate', 'strCreateDate', 'CreateDate', 'createDate', 'PublishDate', 'publishDate', 'NgayDang', 'ngayDang'];
-                        dateControls.forEach(k => {
-                            if (comp.form.controls[k]) {
-                                comp.form.controls[k].setValue(formattedStr);
-                                if (comp.form.controls[k].markAsDirty) comp.form.controls[k].markAsDirty();
-                                if (comp.form.controls[k].markAsTouched) comp.form.controls[k].markAsTouched();
-                                if (comp.form.controls[k].updateValueAndValidity) comp.form.controls[k].updateValueAndValidity();
-                                changed = true;
-                            }
-                        });
-                    }
-                    return changed;
-                });
+                // Đồng bộ Angular Ivy & AngularJS Scope cho ô input ngày
+                syncFormFieldValue(inp, ['StrCreateDate', 'strCreateDate', 'CreateDate', 'createDate', 'PublishDate', 'publishDate', 'NgayDang', 'ngayDang'], formattedStr, { isDate: true, dateObj: dateResult.dateObj });
 
                 const pCalEl = inp.closest('p-calendar');
                 if (pCalEl) {
@@ -3007,19 +2894,10 @@ AIzaSy...Key3..."></textarea>
                         return true;
                     });
                 }
-
-                // Đồng bộ AngularJS Scope (1.x)
-                syncToAngularJs(inp, scope => {
-                    if (scope.model) { scope.model.StrCreateDate = formattedStr; scope.model.CreateDate = formattedStr; }
-                    if (scope.item) { scope.item.StrCreateDate = formattedStr; scope.item.CreateDate = formattedStr; }
-                });
             });
         };
 
-        applyDate();
-        setTimeout(applyDate, 300);
-        setTimeout(applyDate, 800);
-        setTimeout(applyDate, 1500);
+        runWithRetries(applyDate, [0, 300, 800, 1500]);
 
         if (dateResult.isManualUserDate) {
             logStatus(`Đã giữ nguyên Ngày đăng theo giá trị bạn tự chọn trên Form: ${formattedStr.split(' ')[0]}`, 'info');
