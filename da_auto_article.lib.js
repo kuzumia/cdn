@@ -19,6 +19,9 @@
 (function () {
     'use strict';
 
+    if (window.__DA_AUTO_ARTICLE_INITIALIZED__) return;
+    window.__DA_AUTO_ARTICLE_INITIALIZED__ = true;
+
     const pageWin = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
 
     // ==========================================
