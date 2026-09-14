@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         iOffice & Portal Lam Dong - Tự động tạo bài viết từ tài liệu PDF/Word
 // @namespace    http://tampermonkey.net/
-// @version      3.2
-// @description  Hỗ trợ chọn nhiều file, tự động tải lên máy chủ Media Lâm Đồng, tạo thư mục ngày DD-MM-YYYY, lấy link thật gán CKEditor và Avatar, phân tích Gemini 3.7 Flash.
+// @version      3.3
+// @description  Hỗ trợ chọn nhiều file, tự động tải lên máy chủ Media Lâm Đồng, tạo thư mục ngày DD-MM-YYYY, lấy link thật gán CKEditor và Avatar, phân tích Gemini 3.1 Flash-Lite & 2.5 Flash.
 // @author       DA Assistant
 // @match        https://*.lamdong.gov.vn/admin/*
 // @match        https://ducan.lamdong.gov.vn/admin/*
@@ -746,11 +746,10 @@ YÊU CẦU ĐẦU RA (JSON thuần, không bọc markdown):
             <div id="da-tab-settings-content" style="display: none; padding-top: 10px;">
                 <label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Mô hình Gemini AI:</label>
                 <select id="da-gemini-model-select" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; margin-bottom: 12px; font-size: 13px;">
-                    <option value="gemini-3.6-flash">Gemini 3.6 Flash (Khuyên dùng: Chuẩn API, siêu nhanh & thông minh)</option>
-                    <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
-                    <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-                    <option value="gemini-1.5-flash">Gemini 1.5 Flash (Dự phòng)</option>
-                    <option value="gemini-1.5-pro">Gemini 1.5 Pro (Dự phòng)</option>
+                    <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (Khuyên dùng: Siêu nhanh & Tiết kiệm Quota)</option>
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (Chuẩn API, đọc ảnh & tài liệu scan chuẩn xác)</option>
+                    <option value="gemini-3.6-flash">Gemini 3.6 Flash (Tư duy cao cấp, xử lý phức tạp)</option>
+                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (Dành cho tài liệu dài chuyên sâu)</option>
                 </select>
 
                 <label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">Tối ưu Dung lượng & Tốc độ tải Ảnh bìa (Trang 1 PDF):</label>
@@ -1041,8 +1040,12 @@ AIzaSy...Key3..."></textarea>
             const keys = getApiKeyList();
             geminiKeyInput.value = keys.join('\n');
             updateKeyCountInfo();
-            let currentModel = GM_getValue('GEMINI_MODEL', 'gemini-3.6-flash');
-            if (currentModel === 'gemini-2.0-flash') currentModel = 'gemini-3.6-flash';
+            let currentModel = GM_getValue('GEMINI_MODEL', 'gemini-3.1-flash-lite');
+            const deprecatedModels = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash', 'gemini-3.7-flash'];
+            if (!currentModel || deprecatedModels.includes(currentModel)) {
+                currentModel = 'gemini-3.1-flash-lite';
+                GM_setValue('GEMINI_MODEL', currentModel);
+            }
             geminiModelSelect.value = currentModel;
             if (coverQualitySelect) {
                 coverQualitySelect.value = GM_getValue('COVER_IMAGE_QUALITY', 'fast');
@@ -2028,11 +2031,15 @@ AIzaSy...Key3..."></textarea>
             });
         }
 
-        let userSelectedModel = GM_getValue('GEMINI_MODEL', 'gemini-3.6-flash');
-        if (!userSelectedModel || userSelectedModel === 'gemini-2.0-flash') userSelectedModel = 'gemini-3.6-flash';
+        let userSelectedModel = GM_getValue('GEMINI_MODEL', 'gemini-3.1-flash-lite');
+        const deprecatedModels = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash', 'gemini-3.7-flash'];
+        if (!userSelectedModel || deprecatedModels.includes(userSelectedModel)) {
+            userSelectedModel = 'gemini-3.1-flash-lite';
+            GM_setValue('GEMINI_MODEL', userSelectedModel);
+        }
 
         // Chuỗi Fallback Model: nếu model đầu tiên gặp lỗi sẽ tự động chuyển sang model kế tiếp
-        const candidateModels = [userSelectedModel, 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-1.5-flash'];
+        const candidateModels = [userSelectedModel, 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-2.5-pro'];
         const uniqueModels = Array.from(new Set(candidateModels));
 
         const keysPool = Array.isArray(apiKeys) && apiKeys.length > 0 ? apiKeys : getApiKeyList();
@@ -2173,6 +2180,9 @@ AIzaSy...Key3..."></textarea>
                     if (err.message.includes('429') || err.message.includes('403') || err.message.includes('RESOURCE_EXHAUSTED')) {
                         logStatus(`⚠️ ${keyDisplay} hết quota (429), đang tự động chuyển sang Key tiếp theo...`, 'info');
                         break; // Thoát vòng lặp model để thử Key kế tiếp
+                    }
+                    if (err.message.includes('404') || err.message.includes('NOT_FOUND')) {
+                        logStatus(`⚠️ Model ${model} không khả dụng trên ${keyDisplay}, đang thử model tiếp theo...`, 'info');
                     }
                 }
             }
