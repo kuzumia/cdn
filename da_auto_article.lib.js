@@ -25,7 +25,16 @@
     const pageWin = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
 
     // ==========================================
-    // 0. BỘ BẮT VÀ ĐỒNG BỘ HEADERS & PAYLOAD XÁC THỰC TỰ ĐỘNG
+    // CẤU HÌNH BẬT / TẮT (NGƯỜI DÙNG CHỈNH SỬA TẠI ĐÂY)
+    // ==========================================
+    // Biến bật/tắt tự động điền Ngày đăng (+1 ngày cho văn bản cấp Xã):
+    // - true : BẬT - Tự động tính toán & điền Ngày đăng (+1 ngày so với ngày văn bản xã) (mặc định)
+    // - false: TẮT - Không điều chỉnh hay chỉnh sửa input Ngày đăng, để nguyên theo mặc định của Web
+    let isPlusOneDayForPublishDate = true;
+    if (typeof GM_getValue !== 'undefined') {
+        const savedToggle = GM_getValue('IS_PLUS_ONE_DAY_FOR_PUBLISH_DATE', null);
+        if (savedToggle !== null) isPlusOneDayForPublishDate = Boolean(savedToggle);
+    }
     // ==========================================
     let currentUploadedAvatarUrl = '';
     let currentEditorContentHtml = '';
@@ -771,6 +780,15 @@ AIzaSy...Key3..."></textarea>
                 <div style="font-size: 12px; color: #64748b; margin-top: 4px; line-height: 1.4;">
                     💡 <i>Mẹo: Nhập nhiều key giúp tự động chuyển đổi dự phòng khi một key hết hạn mức (mỗi key +1.500 lượt/ngày). Key được lưu bảo mật trong trình duyệt.</i>
                 </div>
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; margin-top: 12px;">
+                    <label style="font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; margin: 0;">
+                        <input type="checkbox" id="da-plus-one-day-checkbox" style="width: 16px; height: 16px; cursor: pointer;">
+                        <span>Tự động tính & điền Ngày đăng (+1 ngày cho văn bản cấp Xã)</span>
+                    </label>
+                    <div style="font-size: 11px; color: #64748b; margin-top: 4px; padding-left: 24px;">
+                        Tắt (bỏ tick): Giữ nguyên ngày mặc định của trang Web, không can thiệp hay sửa ô Ngày đăng.
+                    </div>
+                </div>
                 <div style="text-align: right; margin-top: 12px;">
                     <button class="da-btn da-btn-primary" id="da-save-key-btn">💾 Lưu Cấu hình Toàn diện</button>
                 </div>
@@ -821,6 +839,7 @@ AIzaSy...Key3..."></textarea>
     const geminiKeyInput = document.getElementById('da-gemini-key-input');
     const geminiModelSelect = document.getElementById('da-gemini-model-select');
     const coverQualitySelect = document.getElementById('da-cover-quality-select');
+    const plusOneDayCheckbox = document.getElementById('da-plus-one-day-checkbox');
     const saveKeyBtn = document.getElementById('da-save-key-btn');
     const currentRouteBadge = document.getElementById('da-current-route-badge');
     const duplicateAlert = document.getElementById('da-duplicate-alert');
@@ -1050,6 +1069,9 @@ AIzaSy...Key3..."></textarea>
             if (coverQualitySelect) {
                 coverQualitySelect.value = GM_getValue('COVER_IMAGE_QUALITY', 'fast');
             }
+            if (plusOneDayCheckbox) {
+                plusOneDayCheckbox.checked = Boolean(isPlusOneDayForPublishDate);
+            }
         }
     }
 
@@ -1135,8 +1157,13 @@ AIzaSy...Key3..."></textarea>
         if (coverQualitySelect) {
             GM_setValue('COVER_IMAGE_QUALITY', coverQualitySelect.value);
         }
+        if (plusOneDayCheckbox) {
+            isPlusOneDayForPublishDate = plusOneDayCheckbox.checked;
+            GM_setValue('IS_PLUS_ONE_DAY_FOR_PUBLISH_DATE', isPlusOneDayForPublishDate);
+        }
         const qualityText = coverQualitySelect ? coverQualitySelect.options[coverQualitySelect.selectedIndex].text.split('-')[0].trim() : '';
-        logStatus(`Đã lưu ${savedKeys.length} API Key (Hạn mức: ${(savedKeys.length * 1500).toLocaleString()} req/ngày), Model (${geminiModelSelect.value}) & Ảnh bìa (${qualityText})!`, 'success');
+        const dateToggleText = isPlusOneDayForPublishDate ? 'Bật +1 ngày' : 'Mặc định web';
+        logStatus(`Đã lưu ${savedKeys.length} API Key (Hạn mức: ${(savedKeys.length * 1500).toLocaleString()} req/ngày), Model (${geminiModelSelect.value}), Ảnh bìa (${qualityText}) & Ngày đăng (${dateToggleText})!`, 'success');
         switchTab('upload');
     };
 
@@ -2793,13 +2820,6 @@ AIzaSy...Key3..."></textarea>
 
         return null;
     }
-
-    // ==========================================
-    // CẤU HÌNH BẬT/TẮT TỰ ĐỘNG ĐIỀN NGÀY ĐĂNG (+1 NGÀY CHO CẤP XÃ)
-    // true : BẬT - Tự động tính toán & điền Ngày đăng (+1 ngày so với ngày văn bản xã) (mặc định)
-    // false: TẮT - Không điều chỉnh hay chỉnh sửa input Ngày đăng, để nguyên theo mặc định của Web
-    // ==========================================
-    let isPlusOneDayForPublishDate = true;
 
     // Cho phép xem hoặc bật/tắt nhanh qua Console (F12): window.isPlusOneDayForPublishDate = false / true
     winContexts.forEach(w => {
