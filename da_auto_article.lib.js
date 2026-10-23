@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         iOffice & Portal Lam Dong - Tự động tạo bài viết từ tài liệu PDF/Word
 // @namespace    http://tampermonkey.net/
-// @version      3.3
+// @version      3.4
 // @description  Hỗ trợ chọn nhiều file, tự động tải lên máy chủ Media Lâm Đồng, tạo thư mục ngày DD-MM-YYYY, lấy link thật gán CKEditor và Avatar, phân tích Gemini 3.1 Flash-Lite & 2.5 Flash.
 // @author       DA Assistant
 // @match        https://*.lamdong.gov.vn/admin/*
@@ -91,7 +91,7 @@
                         });
                     }
                 }
-            } catch (e) {}
+            } catch (e) { }
 
             // Lớp 3: Monkey-patch bảo vệ trực tiếp CKEditor 4
             const patchCk = (ck) => {
@@ -107,7 +107,7 @@
                                 if (win && win.$ && win.$.getComputedStyle) {
                                     return origGetComputedStyle.apply(this, arguments);
                                 }
-                            } catch (e) {}
+                            } catch (e) { }
                             return '';
                         };
                     }
@@ -149,11 +149,11 @@
                     get: () => currentCK,
                     set: (val) => {
                         currentCK = val;
-                        try { patchCk(val); } catch (e) {}
+                        try { patchCk(val); } catch (e) { }
                     }
                 });
-            } catch (e) {}
-        } catch (e) {}
+            } catch (e) { }
+        } catch (e) { }
 
         try {
             function captureArticleTypeFromResult(result) {
@@ -202,7 +202,7 @@
                     if (parsed && typeof parsed === 'object') {
                         return JSON.stringify(enrichArticlePayload(parsed));
                     }
-                } catch (e) {}
+                } catch (e) { }
                 return bodyStr;
             }
 
@@ -232,10 +232,10 @@
                             try {
                                 const res = JSON.parse(this.responseText);
                                 captureArticleTypeFromResult(res && res.Result);
-                            } catch (e) {}
+                            } catch (e) { }
                         }
                     });
-                } catch (e) {}
+                } catch (e) { }
 
                 data = tryEnrichJsonBody(data);
                 return origSend.call(this, data);
@@ -254,13 +254,13 @@
                             const clone = response.clone();
                             clone.json().then(res => {
                                 captureArticleTypeFromResult(res && res.Result);
-                            }).catch(() => {});
+                            }).catch(() => { });
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                     return response;
                 };
             }
-        } catch (e) {}
+        } catch (e) { }
     });
 
     // Cấu hình PDF.js worker
@@ -367,7 +367,7 @@ YÊU CẦU ĐẦU RA (JSON thuần, không bọc markdown):
                             resolve(res.Result);
                             return;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }
                 resolve([]);
             };
@@ -946,7 +946,7 @@ AIzaSy...Key3..."></textarea>
         if (!title && !code && !fileName) return;
         const history = getDocumentHistory();
         const detectedCode = code || extractDocumentCode(title, fileName) || fileName;
-        
+
         const existingIdx = history.findIndex(it => (it.code && it.code.toLowerCase() === detectedCode.toLowerCase()) || (it.title && it.title.toLowerCase() === (title || '').toLowerCase()));
         const record = {
             id: Date.now().toString(),
@@ -974,7 +974,7 @@ AIzaSy...Key3..."></textarea>
         historyTableBody.innerHTML = '';
 
         const query = filterQuery.trim().toLowerCase();
-        const filtered = query ? history.filter(it => 
+        const filtered = query ? history.filter(it =>
             (it.code && it.code.toLowerCase().includes(query)) ||
             (it.title && it.title.toLowerCase().includes(query)) ||
             (it.fileName && it.fileName.toLowerCase().includes(query)) ||
@@ -1604,7 +1604,7 @@ AIzaSy...Key3..."></textarea>
                     headers['Authorization'] = v.replace(/^"|"$/g, '');
                 }
             }
-        } catch (e) {}
+        } catch (e) { }
 
         // 2. Quét sessionStorage
         try {
@@ -1616,7 +1616,7 @@ AIzaSy...Key3..."></textarea>
                     headers['Authorization'] = v.replace(/^"|"$/g, '');
                 }
             }
-        } catch (e) {}
+        } catch (e) { }
 
         // 3. Quét AngularJS $http defaults
         if (window.angular) {
@@ -1630,7 +1630,7 @@ AIzaSy...Key3..."></textarea>
                     if (common['currentpublicip']) headers['currentpublicip'] = common['currentpublicip'];
                     if (common['Authorization'] || common['authorization']) headers['Authorization'] = common['Authorization'] || common['authorization'];
                 }
-            } catch (e) {}
+            } catch (e) { }
         }
 
         if (headers['Authorization'] && !headers['Authorization'].startsWith('Bearer ')) {
@@ -1715,7 +1715,7 @@ AIzaSy...Key3..."></textarea>
         const origin = window.location.origin;
         const isImage = filename.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp|bmp)$/);
         const authHeaders = getCmsAuthHeaders();
-        
+
         const formData = new FormData();
         formData.append('Files[]', fileOrBlob, filename);
         if (folderId) {
@@ -1925,7 +1925,7 @@ AIzaSy...Key3..."></textarea>
 
             // 6. UPLOAD THỰC TẾ LÊN MÁY CHỦ MEDIA LÂM ĐỒNG VÀO THƯ MỤC NGÀY ĐĂNG
             logStatus(`Đang tải các tệp tin và ảnh bìa vào thư mục "${targetFolderDateStr}"...`, 'info');
-            
+
             // Upload ảnh bìa
             let uploadedCover = null;
             if (coverImageBlob) {
@@ -2085,7 +2085,7 @@ AIzaSy...Key3..."></textarea>
                                     try {
                                         const resJson = JSON.parse(response.responseText);
                                         const text = resJson.candidates[0].content.parts[0].text;
-                                        
+
                                         // 1. Thử parse trực tiếp
                                         try {
                                             const parsed = JSON.parse(text);
@@ -2099,7 +2099,7 @@ AIzaSy...Key3..."></textarea>
                                                 });
                                                 return;
                                             }
-                                        } catch (e) {}
+                                        } catch (e) { }
 
                                         // 2. Xử lý làm sạch chuỗi JSON
                                         let cleanText = text.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -2121,7 +2121,7 @@ AIzaSy...Key3..."></textarea>
                                                 });
                                                 return;
                                             }
-                                        } catch (e) {}
+                                        } catch (e) { }
 
                                         // 3. Fallback: Dùng Regex trích xuất độc lập title và contentHtml
                                         const titleMatch = cleanText.match(/"(?:title|Title)"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
@@ -2129,7 +2129,7 @@ AIzaSy...Key3..."></textarea>
                                         const dateMatch = cleanText.match(/"(?:documentDate|DocumentDate)"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
                                         const issuerMatch = cleanText.match(/"(?:issuerLevel|IssuerLevel)"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
                                         let contentMatch = cleanText.match(/"(?:contentHtml|ContentHtml|content)"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
-                                        
+
                                         if (!contentMatch) {
                                             const contentStart = cleanText.indexOf('"contentHtml"') !== -1 ? cleanText.indexOf('"contentHtml"') : cleanText.indexOf('"content"');
                                             if (contentStart !== -1) {
@@ -2210,8 +2210,8 @@ AIzaSy...Key3..."></textarea>
                 if (!node || (node.closest && node.closest('#da-modal, .da-auto-wrapper'))) return;
                 try {
                     const comp = (realNg.getComponent && realNg.getComponent(node)) ||
-                                 (realNg.getOwningComponent && realNg.getOwningComponent(node)) ||
-                                 (realNg.getContext && realNg.getContext(node));
+                        (realNg.getOwningComponent && realNg.getOwningComponent(node)) ||
+                        (realNg.getContext && realNg.getContext(node));
                     if (comp) {
                         const changed = updater(comp, realNg);
                         if (changed) {
@@ -2226,9 +2226,9 @@ AIzaSy...Key3..."></textarea>
                             if (realNg.applyChanges) realNg.applyChanges(comp);
                         }
                     }
-                } catch (e) {}
+                } catch (e) { }
             });
-        } catch (e) {}
+        } catch (e) { }
     }
 
     /**
@@ -2249,12 +2249,12 @@ AIzaSy...Key3..."></textarea>
                     if (scope) {
                         const changed = updater(scope);
                         if (changed !== false) {
-                            try { scope.$applyAsync(); } catch (e) {}
+                            try { scope.$applyAsync(); } catch (e) { }
                         }
                     }
-                } catch (e) {}
+                } catch (e) { }
             });
-        } catch (e) {}
+        } catch (e) { }
     }
 
     /**
@@ -2264,10 +2264,10 @@ AIzaSy...Key3..."></textarea>
         if (typeof fn !== 'function') return;
         delays.forEach(d => {
             if (d === 0) {
-                try { fn(); } catch (e) {}
+                try { fn(); } catch (e) { }
             } else {
                 setTimeout(() => {
-                    try { fn(); } catch (e) {}
+                    try { fn(); } catch (e) { }
                 }, d);
             }
         });
@@ -2333,14 +2333,14 @@ AIzaSy...Key3..."></textarea>
         if (!element) return;
         try {
             element.value = value;
-        } catch (e) {}
+        } catch (e) { }
         try {
             const proto = Object.getPrototypeOf(element);
             const valueSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
             if (valueSetter) {
                 valueSetter.call(element, value);
             }
-        } catch (e) {}
+        } catch (e) { }
 
         element.dispatchEvent(new Event('input', { bubbles: true }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
@@ -2440,12 +2440,12 @@ AIzaSy...Key3..."></textarea>
                             const doSet = () => {
                                 try {
                                     inst.setData(html, function () {
-                                        try { inst.fire('change'); } catch (e) {}
-                                        try { inst.fire('dataReady'); } catch (e) {}
-                                        try { inst.fire('saveSnapshot'); } catch (e) {}
-                                        try { if (inst.updateElement) inst.updateElement(); } catch (e) {}
+                                        try { inst.fire('change'); } catch (e) { }
+                                        try { inst.fire('dataReady'); } catch (e) { }
+                                        try { inst.fire('saveSnapshot'); } catch (e) { }
+                                        try { if (inst.updateElement) inst.updateElement(); } catch (e) { }
                                     });
-                                } catch (e) {}
+                                } catch (e) { }
                             };
                             if (inst.status === 'ready') {
                                 doSet();
@@ -2454,7 +2454,7 @@ AIzaSy...Key3..."></textarea>
                             } else {
                                 doSet();
                             }
-                        } catch (e) {}
+                        } catch (e) { }
                     }
                 }
             }
@@ -2467,7 +2467,7 @@ AIzaSy...Key3..."></textarea>
                         if (ifr.contentDocument && ifr.contentDocument.body) {
                             ifr.contentDocument.body.innerHTML = html;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 });
             }
 
@@ -2507,7 +2507,7 @@ AIzaSy...Key3..."></textarea>
         // 1. Cập nhật trực tiếp ô xem trước cạnh nút "Chọn hình ảnh"
         const allButtons = Array.from(document.querySelectorAll('button, a, div'));
         const selectImgBtn = allButtons.find(b => b.textContent && b.textContent.includes('Chọn hình'));
-        
+
         if (selectImgBtn) {
             const sibling = selectImgBtn.nextElementSibling || selectImgBtn.previousElementSibling;
             if (sibling && !sibling.closest('.cke, .cke_reset, ckeditor')) {
@@ -2557,7 +2557,7 @@ AIzaSy...Key3..."></textarea>
                     currentArticleTypeId = types[0].Id;
                     currentArticleTypeName = types[0].Name;
                 }
-            } catch (e) {}
+            } catch (e) { }
         }
 
         const applySelection = () => {
@@ -2645,7 +2645,7 @@ AIzaSy...Key3..."></textarea>
     }
 
     // ==========================================
-    // 9. XỬ LÝ NGÀY VĂN BẢN & NGÀY ĐĂNG (+ 1 NGÀY)
+    // 9. XỬ LÝ NGÀY VĂN BẢN & NGÀY ĐĂNG (CÓ BIẾN BẬT/TẮT + 1 NGÀY)
     // ==========================================
     function extractDocumentDateFromText(text, filename = '') {
         if (!text && !filename) return null;
@@ -2794,10 +2794,44 @@ AIzaSy...Key3..."></textarea>
         return null;
     }
 
+    // ==========================================
+    // CẤU HÌNH BẬT/TẮT TỰ ĐỘNG ĐIỀN NGÀY ĐĂNG (+1 NGÀY CHO CẤP XÃ)
+    // true : BẬT - Tự động tính toán & điền Ngày đăng (+1 ngày so với ngày văn bản xã) (mặc định)
+    // false: TẮT - Không điều chỉnh hay chỉnh sửa input Ngày đăng, để nguyên theo mặc định của Web
+    // ==========================================
+    let isPlusOneDayForPublishDate = true;
+
+    // Cho phép xem hoặc bật/tắt nhanh qua Console (F12): window.isPlusOneDayForPublishDate = false / true
+    winContexts.forEach(w => {
+        try {
+            Object.defineProperty(w, 'isPlusOneDayForPublishDate', {
+                configurable: true,
+                enumerable: true,
+                get: () => isPlusOneDayForPublishDate,
+                set: (val) => { isPlusOneDayForPublishDate = !!val; }
+            });
+        } catch (e) {
+            w.isPlusOneDayForPublishDate = isPlusOneDayForPublishDate;
+        }
+    });
+
     function computePublishDate(docDateOrString, fullText = '', filename = '', title = '', documentCode = '', aiIssuerLevel = '') {
         const now = new Date();
         const isCommune = isCommuneLevelDocument(aiIssuerLevel, fullText, title, documentCode, filename);
         let baseDate = parseDateString(docDateOrString) || extractDocumentDateFromText(fullText, filename);
+
+        // Nếu tắt tính năng tự động điền ngày đăng: không can thiệp, để nguyên theo mặc định của web
+        if (!isPlusOneDayForPublishDate) {
+            return {
+                dateObj: now,
+                docDateObj: baseDate,
+                isComputedFromDoc: false,
+                isCommune: isCommune,
+                isManualUserDate: false,
+                isPlusOneDay: false,
+                isDisabled: true
+            };
+        }
 
         // Nếu người dùng đã tự chỉnh sửa thủ công ngày trên form trước đó, ưu tiên sử dụng ngày người dùng đã chọn
         if (isDateManuallyEditedByUser && currentPublishDateStr) {
@@ -2809,7 +2843,9 @@ AIzaSy...Key3..."></textarea>
                     docDateObj: baseDate,
                     isComputedFromDoc: false,
                     isCommune: isCommune,
-                    isManualUserDate: true
+                    isManualUserDate: true,
+                    isPlusOneDay: false,
+                    isDisabled: false
                 };
             }
         }
@@ -2824,7 +2860,9 @@ AIzaSy...Key3..."></textarea>
                     dateObj: targetDate,
                     docDateObj: baseDate,
                     isComputedFromDoc: true,
-                    isCommune: true
+                    isCommune: true,
+                    isPlusOneDay: true,
+                    isDisabled: false
                 };
             }
         } else {
@@ -2833,7 +2871,9 @@ AIzaSy...Key3..."></textarea>
                 dateObj: now,
                 docDateObj: baseDate,
                 isComputedFromDoc: false,
-                isCommune: false
+                isCommune: false,
+                isPlusOneDay: false,
+                isDisabled: false
             };
         }
 
@@ -2842,7 +2882,9 @@ AIzaSy...Key3..."></textarea>
             dateObj: now,
             docDateObj: null,
             isComputedFromDoc: false,
-            isCommune: isCommune
+            isCommune: isCommune,
+            isPlusOneDay: false,
+            isDisabled: false
         };
     }
 
@@ -2857,6 +2899,13 @@ AIzaSy...Key3..."></textarea>
     }
 
     function setPublishDateToForm(dateResult) {
+        // Khi TẮT: không điều chỉnh hay chỉnh sửa input ngày đăng nữa, để nguyên theo mặc định của web
+        if (!isPlusOneDayForPublishDate || (dateResult && dateResult.isDisabled)) {
+            currentPublishDateStr = '';
+            logStatus('Giữ nguyên Ngày đăng theo mặc định của trang Web (không can thiệp chỉnh sửa)', 'info');
+            return;
+        }
+
         const formattedStr = formatDateToCMS(dateResult.dateObj);
         currentPublishDateStr = formattedStr;
 
@@ -2917,7 +2966,11 @@ AIzaSy...Key3..."></textarea>
         } else if (dateResult.isCommune && dateResult.isComputedFromDoc && dateResult.docDateObj) {
             const docD = formatDateToCMS(dateResult.docDateObj).split(' ')[0];
             const pubD = formattedStr.split(' ')[0];
-            logStatus(`Đã đặt Ngày đăng: ${pubD} (+1 ngày so với ngày văn bản xã ${docD})`, 'success');
+            if (dateResult.isPlusOneDay) {
+                logStatus(`Đã đặt Ngày đăng: ${pubD} (+1 ngày so với ngày văn bản xã ${docD})`, 'success');
+            } else {
+                logStatus(`Đã đặt Ngày đăng: ${pubD} (theo đúng ngày văn bản xã ${docD}, không cộng thêm ngày)`, 'success');
+            }
         } else if (!dateResult.isCommune) {
             logStatus(`Văn bản cấp Tỉnh/TW: giữ Ngày đăng là ngày hiện tại (${formattedStr})`, 'info');
         } else {
