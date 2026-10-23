@@ -30,11 +30,23 @@
     // Biến bật/tắt tự động điền Ngày đăng (+1 ngày cho văn bản cấp Xã):
     // - true : BẬT - Tự động tính toán & điền Ngày đăng (+1 ngày so với ngày văn bản xã) (mặc định)
     // - false: TẮT - Không điều chỉnh hay chỉnh sửa input Ngày đăng, để nguyên theo mặc định của Web
-    let isPlusOneDayForPublishDate = true;
-    if (typeof GM_getValue !== 'undefined') {
-        const savedToggle = GM_getValue('IS_PLUS_ONE_DAY_FOR_PUBLISH_DATE', null);
-        if (savedToggle !== null) isPlusOneDayForPublishDate = Boolean(savedToggle);
+    const CODE_CONFIG_PLUS_ONE_DAY = true; // Đổi true hoặc false tại đây
+    let isPlusOneDayForPublishDate = CODE_CONFIG_PLUS_ONE_DAY;
+
+    if (typeof GM_getValue !== 'undefined' && typeof GM_setValue !== 'undefined') {
+        const lastCodeVal = GM_getValue('CODE_CONFIG_PLUS_ONE_DAY_LAST', null);
+        if (lastCodeVal !== CODE_CONFIG_PLUS_ONE_DAY) {
+            isPlusOneDayForPublishDate = CODE_CONFIG_PLUS_ONE_DAY;
+            GM_setValue('CODE_CONFIG_PLUS_ONE_DAY_LAST', CODE_CONFIG_PLUS_ONE_DAY);
+            GM_setValue('IS_PLUS_ONE_DAY_FOR_PUBLISH_DATE', CODE_CONFIG_PLUS_ONE_DAY);
+        } else {
+            const savedToggle = GM_getValue('IS_PLUS_ONE_DAY_FOR_PUBLISH_DATE', null);
+            if (savedToggle !== null) isPlusOneDayForPublishDate = Boolean(savedToggle);
+        }
     }
+
+    // ==========================================
+    // 0. BỘ BẮT VÀ ĐỒNG BỘ HEADERS & PAYLOAD XÁC THỰC TỰ ĐỘNG
     // ==========================================
     let currentUploadedAvatarUrl = '';
     let currentEditorContentHtml = '';
